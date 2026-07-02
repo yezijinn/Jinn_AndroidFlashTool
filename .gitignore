@@ -39,4 +39,5 @@ desktop.ini
 
 # 项目特定
 backup/
-*.log
+*.logXiaoMi/*.png
+XiaoMi/*.jpg

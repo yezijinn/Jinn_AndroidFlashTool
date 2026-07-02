@@ -1,6 +1,6 @@
 # 小米刷机工具 (XiaoMi Flash Tool)
 
-一款功能强大的Windows单文件exe刷机工具，支持小米/红米等Android手机的ADB/Fastboot操作。
+一款功能简单、画面简约的Windows单文件exe刷机工具，支持Android手机的ADB/Fastboot操作。
 
 ## 功能特性
 
@@ -21,9 +21,9 @@
 
 ## 使用方法
 
-1. 下载并运行 `XiaoMiFlashTool.exe`
-2. 手机开启USB调试，连接电脑
-3. 根据需要选择相应功能
+1. 下载并运行 `XiaoMiFlashTool.exe`。
+2. 手机开启USB调试，连接电脑，建议使用原装数据线，台式机接主板上(机箱背面)。
+3. 电脑缺少安卓驱动时，点击菜单“实用工具”，点击按钮“安卓的驱动”。
 
 ## 项目结构
 

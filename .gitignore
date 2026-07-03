@@ -1,6 +1,3 @@
-问答日志.md
-开发日志.md
-
 # Python
 __pycache__/
 *.py[cod]
@@ -42,7 +39,12 @@ desktop.ini
 
 # 项目特定
 backup/
-*.logXiaoMi/*.png
+*.log
+
+# 二维码图片
+XiaoMi/*.png
 XiaoMi/*.jpg
+
+# 日志
 问答日志.md
 开发日志.md

@@ -4,7 +4,8 @@
 单文件exe, Win7-11 64位, 零外部依赖
 """
 
-import os, sys, subprocess, threading, ctypes, locale, shlex
+import os, sys, subprocess, threading, ctypes, locale, shlex, hashlib, base64
+from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 
@@ -23,7 +24,6 @@ def _verify_integrity():
         if len(data) < 64: return True
         stored = data[-44:].decode('ascii', errors='ignore').strip()
         if len(stored) != 44: return True  # 无校验码则跳过
-        import hashlib, base64
         actual = base64.b64encode(hashlib.sha256(data[:-44]).digest()).decode()
         if actual != stored:
             import tkinter.messagebox as mb
@@ -34,29 +34,34 @@ def _verify_integrity():
 if not _verify_integrity():
     sys.exit(1)
 
-# ── 路径 ──
-if hasattr(sys, '_MEIPASS'):
-    APP_DIR = os.path.dirname(sys.executable)
+# ── 路径 (pathlib.Path + Unicode, 全项目统一) ──
+if hasattr(sys, 'frozen'):
+    BASE_DIR = Path(sys.executable).resolve().parent
 else:
-    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+    BASE_DIR = Path(__file__).resolve().parent
+
+# PyInstaller 内置资源目录 (onedir: exe同目录; onefile: _MEIPASS临时解压)
+# 业务文件路径一律用 BASE_DIR, 不要依赖 _MEIPASS
+BUNDLE_DIR = Path(getattr(sys, '_MEIPASS', BASE_DIR))
 
 SYS_ENCODING = locale.getpreferredencoding() or 'gbk'
-XIAOMI_DIR = os.path.join(APP_DIR, 'XiaoMi')
+TOOLS_DIR = BASE_DIR / 'tools'
+XIAOMI_DIR = BASE_DIR / 'XiaoMi'
 
 def resource_path(rp):
-    return os.path.join(sys._MEIPASS if hasattr(sys,'_MEIPASS') else APP_DIR, 'tools', rp)
+    """PyInstaller 内置资源 (tools/下的工具), 返回Path"""
+    return BUNDLE_DIR / 'tools' / rp
 
 def xiaomi_path(fn):
-    p = os.path.join(XIAOMI_DIR, fn)
-    if os.path.exists(p): return p
-    if hasattr(sys, '_MEIPASS'):
-        p2 = os.path.join(sys._MEIPASS, 'XiaoMi', fn)
-        if os.path.exists(p2): return p2
-    return p
+    """XiaoMi资源: 优先 exe 同目录, 回退内置目录, 返回Path"""
+    p = XIAOMI_DIR / fn
+    if p.exists(): return p
+    return BUNDLE_DIR / 'XiaoMi' / fn
 
 def get_short_path(path):
-    """将中文长路径转换为Windows短路径(8.3格式)，解决adb中文乱码"""
+    """将中文长路径转换为Windows短路径(8.3格式)，解决cmd/adb中文乱码"""
     if not path: return path
+    path = os.fspath(path)
     try:
         # 调用Windows API获取短路径
         GetShortPathNameW = ctypes.windll.kernel32.GetShortPathNameW
@@ -69,15 +74,41 @@ def get_short_path(path):
     except: pass
     return path
 
+def _join_remote_target(d, name):
+    """adb的目录目标探测在部分设备(如Android16)失效会报EISDIR,
+    手动判断: 以'/'结尾或末段不含扩展名 → 视为目录, 拼上本地文件名"""
+    if d.endswith('/'):
+        return d + name
+    tail = d.rsplit('/', 1)[-1]
+    if tail and '.' not in tail:
+        return d + '/' + name
+    return d
+
+BUNDLED_TOOLS = ('adb', 'fastboot', 'scrcpy')
+
 def get_tool_path(tn):
-    if tn in ('adb','fastboot','scrcpy'):
-        exe = tn+'.exe'
-        p = resource_path(exe)
-        if os.path.exists(p): return p
-        p2 = os.path.join(APP_DIR, exe)
-        if os.path.exists(p2): return p2
-        return exe
+    """adb/fastboot/scrcpy 工具路径: 严格使用打包内置(BUNDLE_DIR/tools),
+    禁止回退到系统PATH的全局adb; 缺失时返回不存在的Path由调用方检查"""
+    if tn in BUNDLED_TOOLS:
+        return resource_path(tn + '.exe')
     return tn
+
+# ── 内置图片加密 (打包后存为 .enc, 防止直接提取原图) ──
+_IMG_KEY = b'XiaoMiFlashTool#2026#QR-Enc'
+_IMG_ENC_SUFFIX = '.enc'
+
+def _img_stream(key, salt, length):
+    """SHA256计数器流密钥 (XOR对称加密/解密共用)"""
+    out = bytearray(); counter = 0
+    while len(out) < length:
+        out.extend(hashlib.sha256(key + salt + counter.to_bytes(4, 'little')).digest())
+        counter += 1
+    return bytes(out[:length])
+
+def img_xor(data, name):
+    """加解密一体: 用文件名做salt, 保证每张图片密文不同"""
+    key = _img_stream(_IMG_KEY, name.encode('utf-8'), len(data))
+    return bytes(a ^ b for a, b in zip(data, key))
 
 def is_admin():
     try: return ctypes.windll.shell32.IsUserAnAdmin()
@@ -278,6 +309,17 @@ class App:
         self.tool_status = tk.Label(sbar, text="", bg=C['surface'], fg=C['subtext'], font=('Microsoft YaHei UI',9,'bold'), anchor=tk.E)
         self.tool_status.pack(side=tk.RIGHT, padx=14, pady=4)
 
+    def _load_photo(self, fn):
+        """加载图片: 外部原图(.png)优先, 否则解密内置 .enc, 全程内存操作"""
+        p = xiaomi_path(fn)
+        if p.exists():
+            return tk.PhotoImage(file=str(p))
+        enc = BUNDLE_DIR / 'XiaoMi' / (fn + _IMG_ENC_SUFFIX)
+        if enc.exists():
+            data = img_xor(enc.read_bytes(), fn)
+            return tk.PhotoImage(data=base64.b64encode(data).decode('ascii'))
+        return None
+
     def _build_qrcode(self, parent):
         right = tk.Frame(parent, bg=C['card'], width=360, highlightbackground=C['border'], highlightthickness=1)
         right.pack(side=tk.LEFT, fill=tk.BOTH, padx=(6,0)); right.pack_propagate(False)
@@ -290,28 +332,29 @@ class App:
             ("_qqfriend_thumb.png","QQ好友",   "QQ好友.png"),
         ]
         for idx, (thumb, label, orig) in enumerate(items):
-            tp = xiaomi_path(thumb); op = xiaomi_path(orig)
-            if os.path.exists(tp) and os.path.exists(op):
-                try:
-                    r = int(idx / 2); c = idx % 2
-                    cell = tk.Frame(right, bg=C['card'], highlightbackground=C['border'], highlightthickness=1)
-                    cell.grid(row=r, column=c, sticky='nsew', padx=3, pady=3)
-                    right.grid_rowconfigure(r, weight=1)
-                    right.grid_columnconfigure(c, weight=1)
-                    img = tk.PhotoImage(file=tp); self._img_refs.append(img)
-                    tk.Label(cell, image=img, bg=C['card']).pack(pady=(6,0))
-                    bf = tk.Frame(cell, bg=C['card']); bf.pack(fill=tk.X, pady=(2,4))
-                    tk.Label(bf, text=label, bg=C['card'], fg=C['subtext'], font=('Microsoft YaHei UI',9)).pack(side=tk.LEFT, padx=4)
-                    self._btn(bf, "大图", lambda p=op: self._view_large(p), width=56, height=26, font=('Microsoft YaHei UI',8)).pack(side=tk.RIGHT, padx=4)
-                except:
-                    pass
+            img = self._load_photo(thumb)
+            if img is None: continue
+            try:
+                r = int(idx / 2); c = idx % 2
+                cell = tk.Frame(right, bg=C['card'], highlightbackground=C['border'], highlightthickness=1)
+                cell.grid(row=r, column=c, sticky='nsew', padx=3, pady=3)
+                right.grid_rowconfigure(r, weight=1)
+                right.grid_columnconfigure(c, weight=1)
+                self._img_refs.append(img)
+                tk.Label(cell, image=img, bg=C['card']).pack(pady=(6,0))
+                bf = tk.Frame(cell, bg=C['card']); bf.pack(fill=tk.X, pady=(2,4))
+                tk.Label(bf, text=label, bg=C['card'], fg=C['subtext'], font=('Microsoft YaHei UI',9)).pack(side=tk.LEFT, padx=4)
+                self._btn(bf, "大图", lambda o=orig: self._view_large(o), width=56, height=26, font=('Microsoft YaHei UI',8)).pack(side=tk.RIGHT, padx=4)
+            except:
+                pass
 
-    def _view_large(self, fp):
-        if not os.path.exists(fp): messagebox.showwarning("提示","图片未找到"); return
-        win = tk.Toplevel(self.root); win.title("查看大图 - "+os.path.basename(fp)); win.configure(bg=C['bg'])
+    def _view_large(self, fn):
+        img = self._load_photo(fn)
+        if img is None: messagebox.showwarning("提示","图片未找到"); return
+        win = tk.Toplevel(self.root); win.title("查看大图 - "+os.path.basename(fn)); win.configure(bg=C['bg'])
         win.transient(self.root); win.grab_set()
         try:
-            img = tk.PhotoImage(file=fp); win._photo = img
+            win._photo = img
             w,h = img.width(), img.height()
             sw,sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
             mw,mh = int(sw*0.7), int(sh*0.7)
@@ -355,7 +398,7 @@ class App:
         """通用子进程执行 (Popen+readline+after), 消除3处重复
         proc_attr: 存储进程引用的属性名 ('current_process' 或 'scrpcy_process')
         """
-        self._log(f">>> {' '.join(cmd)}", 'cmd')
+        self._log(f">>> {' '.join(os.fspath(c) for c in cmd)}", 'cmd')
         self._set_status(f"执行中: {label}")
         self.is_running = True
         def w():
@@ -388,35 +431,45 @@ class App:
             if self.is_running: return  # 已有命令在执行中
             tool, args = self._cmd_queue.pop(0)
             remaining = bool(self._cmd_queue)
-        cmd = [get_tool_path(tool)] + args
+        tp = get_tool_path(tool)
+        if tool in BUNDLED_TOOLS and not tp.exists():
+            self._log(f"[!] 未找到打包内置工具: {tool}.exe", 'err')
+            if remaining: self.root.after(300, self._run_next)
+            return
+        cmd = [tp] + args
         self._exec_subprocess(cmd, f"{tool} {' '.join(args)}",
                               on_done=(lambda: self.root.after(300, self._run_next)) if remaining else None)
 
     def _run_file(self, fp, args=None):
-        """执行本地exe/bat/ps1文件"""
-        if not os.path.exists(fp):
+        """执行本地exe/bat/ps1文件 (参数数组, 不经过CMD字符串拼接)"""
+        fp = Path(fp)
+        if not fp.exists():
             self._log(f"[!] 文件未找到: {fp}", 'warn')
             messagebox.showwarning("提示", f"文件未找到:\n{fp}"); return
-        ext = os.path.splitext(fp)[1].lower()
-        if ext == '.bat': cmd = ['cmd', '/c', fp]
-        elif ext == '.ps1': cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File', fp]
-        else: cmd = [fp] + (args or [])
-        self._exec_subprocess(cmd, os.path.basename(fp))
+        ext = fp.suffix.lower()
+        if ext == '.bat':
+            # cmd.exe会二次解析路径, 中文/空格路径转8.3短路径规避乱码
+            cmd = ['cmd', '/c', get_short_path(fp)]
+        elif ext == '.ps1':
+            cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File', str(fp)]
+        else:
+            cmd = [str(fp)] + (args or [])
+        self._exec_subprocess(cmd, fp.name)
 
     def _browse(self, title, mode='file', ext=None):
         """统一文件对话框 (mode: file/any/dir/save)"""
         if mode == 'dir':
-            return filedialog.askdirectory(title=title, initialdir=APP_DIR)
+            return filedialog.askdirectory(title=title, initialdir=str(BASE_DIR))
         if mode == 'save':
             e = ext or '.img'
-            return filedialog.asksaveasfilename(title=title, defaultextension=e, initialdir=APP_DIR,
+            return filedialog.asksaveasfilename(title=title, defaultextension=e, initialdir=str(BASE_DIR),
                                                 filetypes=[("镜像文件", f"*{e}"), ("所有文件", "*.*")])
         if mode == 'any':
-            return filedialog.askopenfilename(title=title, initialdir=APP_DIR, filetypes=[("所有文件", "*.*")])
+            return filedialog.askopenfilename(title=title, initialdir=str(BASE_DIR), filetypes=[("所有文件", "*.*")])
         if ext:
-            return filedialog.askopenfilename(title=title, initialdir=APP_DIR,
+            return filedialog.askopenfilename(title=title, initialdir=str(BASE_DIR),
                                               filetypes=[(f"{ext.upper()}文件", f"*{ext}"), ("所有文件", "*.*")])
-        return filedialog.askopenfilename(title=title, initialdir=APP_DIR,
+        return filedialog.askopenfilename(title=title, initialdir=str(BASE_DIR),
                                           filetypes=[("镜像文件", "*.img"), ("所有文件", "*.*")])
 
     def _on_close(self):
@@ -479,7 +532,7 @@ class App:
         ttk.Label(tab, text="将Magisk/KernelSU镜像刷入boot分区以获取ROOT权限", style='Sub.TLabel').pack(padx=18,pady=(10,4),anchor=tk.W)
         sf=ttk.Frame(tab); sf.pack(fill=tk.X, padx=18, pady=3)
         ttk.Label(sf, text="镜像文件:").pack(side=tk.LEFT)
-        self.magisk_var=tk.StringVar(value=os.path.join(APP_DIR,"2.img")); ttk.Entry(sf,textvariable=self.magisk_var,width=55).pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
+        self.magisk_var=tk.StringVar(value=str(BASE_DIR / "2.img")); ttk.Entry(sf,textvariable=self.magisk_var,width=55).pack(side=tk.LEFT, padx=6, fill=tk.X, expand=True)
         self._btn(sf, "浏览...", self._sel_magisk, width=78, height=32).pack(side=tk.LEFT)
         ff=ttk.LabelFrame(tab, text="刷入方式"); ff.pack(fill=tk.X, padx=18, pady=6)
         self.flash_method=tk.StringVar(value="boot")
@@ -495,7 +548,7 @@ class App:
         self.pull_boot_src=tk.StringVar(value="/storage/emulated/0/Download/2.img"); ttk.Entry(pf1,textvariable=self.pull_boot_src).pack(side=tk.LEFT,padx=6,fill=tk.X,expand=True)
         pf2=ttk.Frame(tab); pf2.pack(fill=tk.X, padx=18, pady=3)
         ttk.Label(pf2, text="保存到:").pack(side=tk.LEFT)
-        self.pull_boot_dst=tk.StringVar(value=os.path.join(APP_DIR,"2.img")); ttk.Entry(pf2,textvariable=self.pull_boot_dst).pack(side=tk.LEFT,padx=6,fill=tk.X,expand=True)
+        self.pull_boot_dst=tk.StringVar(value=str(BASE_DIR / "2.img")); ttk.Entry(pf2,textvariable=self.pull_boot_dst).pack(side=tk.LEFT,padx=6,fill=tk.X,expand=True)
         self._btn(pf2, "浏览...", self._sel_pull_boot_dst, width=78, height=32).pack(side=tk.LEFT)
         self._btn(pf2, "拉取", self._do_pull_boot, 'primary', width=105).pack(side=tk.LEFT, padx=4)
 
@@ -512,7 +565,6 @@ class App:
     def _do_pull_boot(self):
         s=self.pull_boot_src.get().strip(); d=self.pull_boot_dst.get().strip()
         if not d: messagebox.showwarning("提示","请填写保存路径"); return
-        d = get_short_path(d) if d else d  # 转换中文路径为短路径
         self._run("adb",["pull",s,d])
 
     # ════════════════════════════════════════════
@@ -545,7 +597,7 @@ class App:
             self._run("fastboot",["flash","recovery_a",img]); self._run("fastboot",["flash","recovery_b",img])
         elif m=="misc_recovery":
             misc=resource_path("misc.bin")
-            if os.path.exists(misc): self._run("fastboot",["flash","misc",misc])
+            if misc.exists(): self._run("fastboot",["flash","misc",misc])
             else: self._log("[!] misc.bin未找到, 跳过misc刷入",'warn')
             self._run("fastboot",["flash","recovery",img])
         elif m=="boot_temp": self._run("fastboot",["boot",img])
@@ -579,7 +631,7 @@ class App:
         self.pull_src=tk.StringVar(value="/storage/emulated/0/Download/2.img"); ttk.Entry(r3a,textvariable=self.pull_src,width=45).pack(side=tk.LEFT,padx=6,fill=tk.X,expand=True)
         r3b=ttk.Frame(f3); r3b.pack(fill=tk.X, padx=12, pady=4)
         ttk.Label(r3b, text="存电脑路径:").pack(side=tk.LEFT)
-        self.pull_dst=tk.StringVar(value=APP_DIR); ttk.Entry(r3b,textvariable=self.pull_dst,width=45).pack(side=tk.LEFT,padx=6,fill=tk.X,expand=True)
+        self.pull_dst=tk.StringVar(value=str(BASE_DIR)); ttk.Entry(r3b,textvariable=self.pull_dst,width=45).pack(side=tk.LEFT,padx=6,fill=tk.X,expand=True)
         self._btn(r3b, "浏览...", self._sel_pull_dst, width=78, height=32).pack(side=tk.LEFT)
         self._btn(r3b, "拉取", self._do_pull, 'primary', width=105).pack(side=tk.LEFT, padx=4)
 
@@ -598,18 +650,21 @@ class App:
     def _do_install_apk(self):
         a=self.apk_var.get().strip()
         if not a or not os.path.exists(a): messagebox.showwarning("提示","请选择APK文件"); return
-        a = get_short_path(a)  # 转换中文路径为短路径
+        # 直接传Unicode路径: adb经CreateProcessW(参数数组)原生支持中文, 短路径反而会变中文+~1乱码
         self._run("adb",["install",a])
     def _do_push(self):
         s,d=self.push_src.get().strip(),self.push_dst.get().strip()
         if not s or not os.path.exists(s): messagebox.showwarning("提示","请选择源文件"); return
         if not d: messagebox.showwarning("提示","请填写手机路径"); return
-        s = get_short_path(s)  # 转换中文路径为短路径
+        # 目录目标显式拼上文件名 (Android16等设备adbd目录探测失效→EISDIR)
+        d = _join_remote_target(d, os.path.basename(s.rstrip('/\\')))
         self._run("adb",["push",s,d])
     def _do_pull(self):
         s,d=self.pull_src.get().strip(),self.pull_dst.get().strip()
         if not s or not d: messagebox.showwarning("提示","请填写路径"); return
-        d = get_short_path(d) if d else d  # 转换中文路径为短路径
+        # pull到本地目录时adb会自行算文件名并截断中文, 显式拼上远程文件名
+        if os.path.isdir(d):
+            d = os.path.join(d, os.path.basename(s.rstrip('/')))
         self._run("adb",["pull",s,d])
 
     # ════════════════════════════════════════════
@@ -698,7 +753,7 @@ fastboot oem set-gpu-preemption 1"""
     def _fix_hosts(self):
         if not is_admin(): messagebox.showerror("错误","需要管理员权限!"); return
         try:
-            hp=os.path.join(os.environ.get('WINDIR',r'C:\Windows'),'System32','drivers','etc','hosts')
+            hp = Path(os.environ.get('WINDIR', r'C:\Windows')) / 'System32' / 'drivers' / 'etc' / 'hosts'
             with open(hp,'r',encoding='utf-8',errors='ignore') as f: c=f.read()
             if 'bigota.d.miui.com' in c: self._log("[OK] hosts已包含小米节点",'ok'); return
             with open(hp,'a',encoding='utf-8') as f: f.write("\n#小米刷机包下载加速\n47.74.196.250 bigota.d.miui.com\n47.74.196.250 hugeota.d.miui.com\n")
@@ -739,7 +794,7 @@ fastboot oem set-gpu-preemption 1"""
 
     def _open_devmgmt(self):
         self._log(">>> 打开设备管理器",'cmd')
-        try: subprocess.Popen(['devmgmt.msc'],shell=True,creationflags=subprocess.CREATE_NO_WINDOW); self._log("[OK] 设备管理器已打开",'ok')
+        try: os.startfile('devmgmt.msc'); self._log("[OK] 设备管理器已打开",'ok')
         except Exception as e: self._log(f"[ERR] {e}",'err')
 
     # ════════════════════════════════════════════
@@ -784,6 +839,9 @@ fastboot oem set-gpu-preemption 1"""
     def _get_device_serial(self):
         """获取当前连接的设备序列号"""
         adb=get_tool_path('adb')
+        if not adb.exists():
+            self._log("[!] 未找到打包内置 adb.exe", 'err')
+            return None
         try:
             r=subprocess.run([adb,'devices','-l'], capture_output=True, text=True,
                              encoding=SYS_ENCODING, errors='replace', creationflags=subprocess.CREATE_NO_WINDOW)

@@ -1,6 +1,6 @@
 # 小米刷机工具 (XiaoMi Flash Tool)
 
-一款功能简单、画面简约的Windows单文件exe刷机工具，支持Android手机的ADB/Fastboot操作。
+一款功能简单、画面简约的Windows刷机工具，支持Android手机的ADB/Fastboot操作。
 
 ## 功能特性
 
@@ -17,7 +17,7 @@
 
 - Windows 7/8/10/11 64位
 - 无需安装任何运行库
-- 单文件exe，无需安装
+- 目录版exe（onedir），支持文件与exe同目录，免安装、无临时解压
 
 ## 使用方法
 
@@ -29,20 +29,30 @@
 
 ```
 flash_tool/
-├── XiaoMiFlashTool.exe   # 编译后的可执行文件
+├── dist/XiaoMiFlashTool/  # 编译输出目录 (分发时整个文件夹拷走)
+│   ├── XiaoMiFlashTool.exe  # 可执行文件 (UPX加壳+SHA校验)
+│   └── _internal/           # 依赖文件夹 (默认隐藏属性)
+│       ├── tools/           # ADB/Fastboot/Scrcpy工具
+│       └── XiaoMi/          # 工具 + 二维码图片(加密为.enc, 包内无原图)
 ├── flash_tool.py         # 主程序源码
-├── 编译.py               # 编译脚本
-├── tools/                # ADB/Fastboot/Scrcpy工具
-├── XiaoMi/               # 内置工具和二维码图片
+├── 编译.py               # 编译脚本 (含图片加密/UPX/加校验码/隐藏依赖夹)
+├── tools/                # 源码用工具 (编译时打进exe目录)
+├── XiaoMi/               # 源码用资源
 ├── upx/                  # UPX加壳工具
 └── README.md             # 本文件
 ```
 
+## 安全与防提取
+
+- **图片加密**: 二维码图片在编译时加密为 `.enc`（SHA256流密钥XOR），运行时在内存解密显示，包内不出现原图
+- **防篡改**: UPX加壳 + SHA256完整性自校验（启动时比对exe末尾校验码）
+- **依赖隐藏**: `_internal` 依赖文件夹默认隐藏
+
 ## 从源码编译
 
 ```bash
-# 安装依赖
-pip install pyinstaller
+# 安装依赖 (需要 PyInstaller 6.x, 用于--contents-directory单依赖夹布局)
+pip install -U pyinstaller
 
 # 编译
 python 编译.py

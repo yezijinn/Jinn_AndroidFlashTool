@@ -10,6 +10,25 @@ import base64
 
 UPX_DIR = os.path.join(os.path.dirname(__file__), 'upx')
 
+# ── 内置图片加密 (与 flash_tool.py 保持一致) ──
+_IMG_KEY = b'XiaoMiFlashTool#2026#QR-Enc'
+_IMG_ENC_SUFFIX = '.enc'
+BUNDLED_IMAGES = [
+    '_wxpay_thumb.png', '_alipay_thumb.png', '_wxfriend_thumb.png', '_qqfriend_thumb.png',
+    '微信收款.png', '支付宝收款.png', '微信好友.png', 'QQ好友.png',
+]
+
+def _img_stream(key, salt, length):
+    out = bytearray(); counter = 0
+    while len(out) < length:
+        out.extend(hashlib.sha256(key + salt + counter.to_bytes(4, 'little')).digest())
+        counter += 1
+    return bytes(out[:length])
+
+def img_xor(data, name):
+    key = _img_stream(_IMG_KEY, name.encode('utf-8'), len(data))
+    return bytes(a ^ b for a, b in zip(data, key))
+
 def _find_upx():
     for root, dirs, files in os.walk(UPX_DIR):
         for f in files:
@@ -61,7 +80,8 @@ def main():
     print("[步骤2] 开始编译...")
     cmd = [
         sys.executable, "-m", "PyInstaller",
-        "--onefile",
+        "--onedir",
+        "--contents-directory", "_internal",
         "--windowed",
         "--noupx",
         "--name", "XiaoMiFlashTool",
@@ -93,14 +113,34 @@ def main():
         input("按回车键退出...")
         return 1
 
-    exe_path = os.path.join(script_dir, "dist", "XiaoMiFlashTool.exe")
+    app_dir = os.path.join(script_dir, "dist", "XiaoMiFlashTool")
+    exe_path = os.path.join(app_dir, "XiaoMiFlashTool.exe")
     if not os.path.exists(exe_path):
         print("[错误] 未找到输出文件！")
         input("按回车键退出...")
         return 1
 
     print()
-    print("[步骤3] UPX加壳...")
+    print("[步骤3] 加密内置图片 (写入.enc, 删除原图)...")
+    img_dir = os.path.join(app_dir, "_internal", "XiaoMi")
+    if os.path.isdir(img_dir):
+        n = 0
+        for fn in BUNDLED_IMAGES:
+            src = os.path.join(img_dir, fn)
+            if not os.path.isfile(src):
+                print(f"  [跳过] 不存在: {fn}")
+                continue
+            with open(src, 'rb') as f: data = f.read()
+            with open(src + _IMG_ENC_SUFFIX, 'wb') as f: f.write(img_xor(data, fn))
+            os.remove(src)
+            n += 1
+            print(f"  已加密: {fn}")
+        print(f"图片加密完成: {n} 张")
+    else:
+        print(f"  [警告] 未找到内置图片目录: {img_dir}")
+
+    print()
+    print("[步骤4] UPX加壳...")
     if upx_exe:
         subprocess.run([upx_exe, "--best", "--compress-icons=0", "--force", exe_path],
                        cwd=script_dir, capture_output=True)
@@ -110,14 +150,23 @@ def main():
         print("  跳过UPX (未找到upx.exe)")
 
     print()
-    print("[步骤4] 写入完整性校验码...")
+    print("[步骤5] 写入完整性校验码...")
     h = _append_hash(exe_path)
     print(f"  SHA256校验码: {h}")
     size_final = os.path.getsize(exe_path) / (1024*1024)
     print(f"  最终大小: {size_final:.1f} MB")
 
     print()
-    print("[步骤5] 清理临时文件...")
+    print("[步骤6] 隐藏依赖文件夹 (_internal)...")
+    internal_dir = os.path.join(app_dir, "_internal")
+    if os.path.isdir(internal_dir):
+        subprocess.run(["attrib", "+h", internal_dir], capture_output=True)
+        print("  已设置隐藏属性")
+    else:
+        print("  [警告] 未找到依赖文件夹")
+
+    print()
+    print("[步骤7] 清理临时文件...")
     for item in ["build", "XiaoMiFlashTool.spec", "__pycache__"]:
         path = os.path.join(script_dir, item)
         if os.path.isdir(path):
@@ -133,9 +182,11 @@ def main():
     print()
     print(f"输出文件: {exe_path}")
     print(f"文件大小: {size_final:.1f} MB")
+    print(f"结构: exe + _internal (隐藏依赖文件夹)")
     if upx_exe:
-        print(f"UPX: ✓ 已加壳 (破解难度提升)")
-    print(f"完整性: ✓ SHA256校验码已嵌入 (防止篡改)")
+        print(f"UPX: OK 已加壳 (破解难度提升)")
+        print(f"完整性: OK SHA256校验码已嵌入 (防止篡改)")
+    print(f"图片: OK 已加密为 .enc (包内不显示原图)")
     print()
     os.startfile(os.path.join(script_dir, "dist"))
     input("按回车键退出...")

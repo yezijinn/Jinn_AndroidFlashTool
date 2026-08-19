@@ -11,13 +11,16 @@
 - **文件管理**: ADB Push/Pull文件传输，支持中文路径
 - **投屏控制**: 使用scrcpy实现手机投屏与控制
 - **实用工具**: 设备管理器、驱动安装、内存清理、压缩工具
+- **极光暗黑主题**: 深空蓝紫底 + 绿/青/靛紫极光渐变，头栏极慢动态光晕（失焦自动暂停，低CPU占用）
 - **安全保护**: UPX加壳 + SHA256完整性校验，防止篡改
 
 ## 系统要求
 
-- Windows 7/8/10/11 64位
+- Windows 8.1/10/11 64位（不支持Win7：Python 3.11需要Win8+系统组件）
 - 无需安装任何运行库
 - 目录版exe（onedir），支持文件与exe同目录，免安装、无临时解压
+
+> 注：「内存清理」工具(WinMemoryCleaner) 依赖系统 .NET Framework 4.x（Win10/11 已内置，无需安装）；其余功能零外部依赖，全部工具随包分发。
 
 ## 使用方法
 
@@ -35,6 +38,9 @@ flash_tool/
 │       ├── tools/           # ADB/Fastboot/Scrcpy工具
 │       └── XiaoMi/          # 工具 + 二维码图片(加密为.enc, 包内无原图)
 ├── flash_tool.py         # 主程序源码
+├── aurora_theme.py       # 极光暗黑主题层 (token/调色板/QSS/极光头栏)
+├── UI设计文档.md          # UI 设计文档 (主题架构/布局/线程/打包)
+├── assets/               # 应用图标 (app_icon.svg 源文件 + app_icon.ico 多尺寸)
 ├── 编译.py               # 编译脚本 (含图片加密/UPX/加校验码/隐藏依赖夹)
 ├── tools/                # 源码用工具 (编译时打进exe目录)
 ├── XiaoMi/               # 源码用资源
@@ -51,8 +57,8 @@ flash_tool/
 ## 从源码编译
 
 ```bash
-# 安装依赖 (需要 PyInstaller 6.x, 用于--contents-directory单依赖夹布局)
-pip install -U pyinstaller
+# 安装依赖 (需要 PySide6 + PyInstaller 6.x, 用于--contents-directory单依赖夹布局)
+pip install -U pyinstaller PySide6
 
 # 编译
 python 编译.py

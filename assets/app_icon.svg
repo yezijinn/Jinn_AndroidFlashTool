@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <!-- 深空底渐变 -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111a30"/>
+      <stop offset="1" stop-color="#060a14"/>
+    </linearGradient>
+    <!-- 极光闪电渐变 (绿→青→靛→紫) -->
+    <linearGradient id="bolt" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="0.35" stop-color="#22d3ee"/>
+      <stop offset="0.7" stop-color="#818cf8"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+    <!-- 底部极光光晕 -->
+    <radialGradient id="glow" cx="0.5" cy="0.92" r="0.85">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.35"/>
+      <stop offset="0.5" stop-color="#6366f1" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+
+  <!-- 圆角深空底板 (Win11 风格圆角) -->
+  <rect x="8" y="8" width="496" height="496" rx="96" fill="url(#bg)"/>
+  <rect x="9" y="9" width="494" height="494" rx="95" fill="none" stroke="#2a3a5c" stroke-width="2" opacity="0.6"/>
+
+  <!-- 底部极光光晕 -->
+  <rect x="8" y="8" width="496" height="496" rx="96" fill="url(#glow)"/>
+
+  <!-- 闪电光晕 -->
+  <path d="M300 72 L164 292 h96 L188 440 L348 200 h-96 Z" fill="url(#bolt)" opacity="0.35" filter="url(#soft)"/>
+
+  <!-- 主闪电 (极光渐变) -->
+  <path d="M300 72 L164 292 h96 L188 440 L348 200 h-96 Z" fill="url(#bolt)"/>
+  <!-- 顶部高光 -->
+  <path d="M300 72 L164 292 h96 L188 440 L205 398 L300 200 L222 200 Z" fill="#ffffff" opacity="0.18"/>
+</svg>
